@@ -31,7 +31,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (PRELOADED – supports large conversations)
+# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -93,7 +93,11 @@ def agent_reply(text: str) -> str:
     else:
         cat = "generic"
 
-    reply = f"{random.choice(ZOMBIE_INTROS)} {random.choice(ZOMBIE_REPLIES[cat])} {random.choice(ZOMBIE_CLOSERS)}"
+    reply = (
+        f"{random.choice(ZOMBIE_INTROS)} "
+        f"{random.choice(ZOMBIE_REPLIES[cat])} "
+        f"{random.choice(ZOMBIE_CLOSERS)}"
+    )
     return sanitize(reply)
 
 # =========================================================
@@ -137,7 +141,7 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
 
-    # 🔒 SUPPORT UP TO 2000 MESSAGES SAFELY
+    # 🔒 KEEP LAST 2000 MESSAGES MAX
     if len(history) > 2000:
         history = history[-2000:]
 
@@ -165,7 +169,7 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     }
 
 # =========================================================
-# MANDATORY FINAL CALLBACK
+# MANDATORY FINAL CALLBACK (GUVI)
 # =========================================================
 def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
@@ -189,3 +193,10 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         logger.info(f"Final report sent for session {session_id}")
     except Exception as e:
         logger.error(f"Callback failed: {e}")
+
+# =========================================================
+# LOCAL RUN (RENDER IGNORES THIS)
+# =========================================================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("api.index:app", host="0.0.0.0", port=8000)
