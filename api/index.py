@@ -3,7 +3,9 @@ import logging
 import random
 import requests
 import os
+import unicodedata
 from typing import List, Optional, Dict
+
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 
@@ -11,152 +13,129 @@ from pydantic import BaseModel
 # 1. SETUP & CONFIGURATION
 # =========================================================
 app = FastAPI(title="GUVI Zombie HoneyPot")
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ZombieAgent")
 
-# HACKATHON CONFIG
-# In Vercel, set these in the "Environment Variables" section of your dashboard
-CALLBACK_URL = os.environ.get("CALLBACK_URL", "https://hackathon.guvi.in/api/updateHoneyPotFinalResult")
-SECRET_API_KEY = os.environ.get("SECRET_API_KEY", "YOUR_SECRET_API_KEY_HERE") 
+CALLBACK_URL = os.environ.get(
+    "CALLBACK_URL",
+    "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
+)
+SECRET_API_KEY = os.environ.get("SECRET_API_KEY", "YOUR_SECRET_API_KEY_HERE")
 
 # =========================================================
-# 2. THE "ZOMBIE" BRAIN (Message Generator)
+# 2. UNICODE SANITIZER (STEP 1–2)
+# =========================================================
+def sanitize_text(text: str) -> str:
+    """
+    Normalizes unicode, removes control characters,
+    and ensures UTF-8 safe JSON strings.
+    """
+    if not text:
+        return ""
+
+    text = unicodedata.normalize("NFKD", text)
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+    text = text.encode("utf-8", "ignore").decode("utf-8")
+
+    return text.strip()
+
+# =========================================================
+# 3. ZOMBIE RESPONSE MEMORY
 # =========================================================
 ZOMBIE_MEMORY = {
     "intros": [
-        "Hello sir,", "Excuse me,", "Oh my god,", "Wait,", "Listen,", 
-        "Actually,", "One second,", "Sir/Madam,", "I am confused,", 
-        "My phone is slow but,", "Sorry for delay,", "I am reading this,",
-        "Okay I understand but,", "Just a moment,", "Hold on,", "Tech is hard for me,",
-        "My glasses were missing,", "My grandson is not here so,", "Please help me,"
+        "Hello sir,", "Excuse me,", "Oh my god,", "Wait,", "Listen,",
+        "Actually,", "One second,", "Sir/Madam,", "I am confused,",
+        "Sorry for delay,", "Please help me,"
     ],
     "upi": [
-        "my GPay is showing 'Server Error' red circle.",
-        "PhonePe is asking for my PIN but screen is black.",
-        "I typed the amount but button is grey.",
-        "Paytm says 'KYC pending' suddenly.",
-        "is this a Merchant account? It asks me.",
-        "can I send 10 rupees first to check?",
-        "the QR code is not scanning clearly.",
-        "my bank server is down I think.",
-        "it says 'Payment Declined' but money is gone?",
-        "do I enter PIN on the incoming request?"
+        "my GPay is showing server error.",
+        "PhonePe is asking for my PIN.",
+        "the QR code is not scanning.",
+        "my bank server is down I think."
     ],
     "bank": [
-        "I cannot find my passbook number.",
-        "is this for my SBI or HDFC account?",
-        "the IFSC code you gave is showing invalid.",
-        "manager said never share OTP on call.",
-        "my ATM card is broken actually.",
-        "can I go to the branch and do this?",
-        "internet banking is locked, wait.",
-        "I am scared to lose my pension money.",
-        "is there a charge for this transfer?",
-        "my account balance is showing zero?"
+        "I cannot find my passbook.",
+        "the IFSC code shows invalid.",
+        "my ATM card is broken."
     ],
     "link": [
-        "the blue link is not opening.",
-        "my phone says 'Malware Detected' when I click.",
-        "screen went white after clicking.",
-        "it is asking to download an APK file?",
-        "chrome is blocking this site.",
-        "can you send the link again properly?",
-        "it redirected to a betting site I think.",
-        "do I need to update my browser first?",
-        "the website text is very small.",
-        "is this the official gov portal?"
+        "the link is not opening.",
+        "chrome says malware detected.",
+        "it asks me to download APK."
     ],
     "otp": [
-        "I did not receive any 6 digit code.",
-        "message came but it is in different language.",
-        "wait, the timer ran out. Send again.",
-        "is the code 4566 or 4576? blurry screen.",
-        "I deleted the message by mistake.",
-        "my son told me not to share codes.",
-        "phone battery died, just restarted.",
-        "I am looking at messages, wait.",
-        "why is the code from a personal number?",
-        "it says 'Do not share with anyone'."
+        "I did not receive any OTP.",
+        "message came but vanished.",
+        "my son told me not to share code."
     ],
     "threat": [
-        "please do not block my account sir.",
-        "I am trying my best, don't be angry.",
+        "please do not block my account.",
         "will police come to my house?",
-        "I am an old man, have mercy.",
-        "why are you shouting in messages?",
-        "give me 5 minutes, panic attack.",
-        "is this legal? I am worried.",
-        "my heart rate is going up.",
-        "can we do this tomorrow please?",
-        "I promise to pay, just wait."
+        "I am very scared."
     ],
     "generic": [
-        "I don't understand this tech stuff.",
-        "what do I do next?",
-        "is this real or fake?",
-        "how do I get the prize money?",
-        "guide me step by step please.",
-        "screen is frozen.",
-        "typing is very hard for me.",
-        "network is 1 bar only.",
-        "battery is 2 percent.",
-        "who is this speaking?"
+        "I don't understand this.",
+        "what should I do next?",
+        "is this real or fake?"
     ],
     "delays": [
-        "Let me find my charger.", "Someone is at the door.", 
-        "Going to balcony for signal.", "Asking my neighbor for help.",
-        "Restarting my phone wait.", "Wait, searching for glasses.",
-        "Hold on, internet buffering.", "Just one minute please.",
-        "Don't cut the call/chat.", "Let me write this down."
+        "Just one minute please.",
+        "Restarting my phone.",
+        "Network is very slow."
     ],
     "closers": [
-        "Are you there?", "Hello?", "Reply fast.", 
-        "Did you get that?", "Can you hear me?", 
-        "Waiting for you.", "Please reply.", 
-        "It is loading...", "Still trying...", "Help me."
+        "Are you there?",
+        "Please reply.",
+        "Waiting for you."
     ]
 }
 
+# =========================================================
+# 4. RESPONSE GENERATOR (STEP 4)
+# =========================================================
 def generate_response(incoming_text: str) -> str:
-    """Generates a context-aware dumb response."""
     msg = incoming_text.lower()
-    
-    if any(x in msg for x in ["upi", "gpay", "paytm", "phonepe", "qr", "scan"]):
+
+    if any(x in msg for x in ["upi", "gpay", "paytm", "phonepe", "qr"]):
         category = "upi"
-    elif any(x in msg for x in ["bank", "account", "ifsc", "statement", "branch"]):
+    elif any(x in msg for x in ["bank", "account", "ifsc"]):
         category = "bank"
-    elif any(x in msg for x in ["link", "click", "url", "http", "website", "apk"]):
+    elif any(x in msg for x in ["link", "url", "http", "apk"]):
         category = "link"
-    elif any(x in msg for x in ["otp", "code", "pin", "password"]):
+    elif any(x in msg for x in ["otp", "pin", "code"]):
         category = "otp"
-    elif any(x in msg for x in ["police", "block", "suspend", "jail", "illegal"]):
+    elif any(x in msg for x in ["block", "police", "illegal"]):
         category = "threat"
     else:
         category = "generic"
 
-    part1 = random.choice(ZOMBIE_MEMORY["intros"])
-    part2 = random.choice(ZOMBIE_MEMORY[category])
-    part3 = random.choice(ZOMBIE_MEMORY["delays"]) if random.random() > 0.5 else ""
-    part4 = random.choice(ZOMBIE_MEMORY["closers"])
+    response = f"{random.choice(ZOMBIE_MEMORY['intros'])} " \
+               f"{random.choice(ZOMBIE_MEMORY[category])} " \
+               f"{random.choice(ZOMBIE_MEMORY['delays']) if random.random() > 0.5 else ''} " \
+               f"{random.choice(ZOMBIE_MEMORY['closers'])}"
 
-    return f"{part1} {part2} {part3} {part4}".replace("  ", " ").strip()
+    return sanitize_text(response.replace("  ", " ").strip())
 
 # =========================================================
-# 3. INTELLIGENCE EXTRACTION (Regex)
+# 5. INTELLIGENCE EXTRACTION (STEP 3)
 # =========================================================
-def extract_intel(history_texts: List[str]) -> dict:
-    full_blob = " ".join(history_texts)
-    
+def extract_intel(history: List[str]) -> dict:
+    safe_blob = sanitize_text(" ".join(history))
+
     return {
-        "bankAccounts": list(set(re.findall(r'\b\d{9,18}\b', full_blob))),
-        "upiIds": list(set(re.findall(r'[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}', full_blob))),
-        "phishingLinks": list(set(re.findall(r'https?://\S+|www\.\S+', full_blob))),
-        "phoneNumbers": list(set(re.findall(r'(?:\+91[\-\s]?)?[6-9]\d{9}', full_blob))),
-        "suspiciousKeywords": list(set(re.findall(r'(?i)\b(block|suspend|verify|kyc|expire|urgent|police)\b', full_blob)))
+        "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", safe_blob))),
+        "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}", safe_blob))),
+        "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", safe_blob))),
+        "phoneNumbers": list(set(re.findall(r"(?:\+91[\-\s]?)?[6-9]\d{9}", safe_blob))),
+        "suspiciousKeywords": list(set(re.findall(
+            r"(?i)\b(block|suspend|verify|kyc|urgent|expire|police)\b", safe_blob
+        )))
     }
 
 # =========================================================
-# 4. API MODELS
+# 6. API MODELS
 # =========================================================
 class MessageItem(BaseModel):
     sender: str
@@ -170,60 +149,67 @@ class RequestPayload(BaseModel):
     metadata: Optional[Dict] = None
 
 # =========================================================
-# 5. CORE ENDPOINT
+# 7. ROUTES
 # =========================================================
 @app.get("/")
 def home():
-    return {"status": "Zombie Honeypot Active", "platform": "Vercel"}
+    return {"status": "Zombie Honeypot Active"}
 
 @app.post("/honey-pot")
 async def chat_handler(payload: RequestPayload, background_tasks: BackgroundTasks):
-    session_id = payload.sessionId
-    user_msg = payload.message.text
-    
-    reply_text = generate_response(user_msg)
-    
-    all_msgs = [m.text for m in payload.conversationHistory]
-    all_msgs.append(user_msg)
-    
-    intel_data = extract_intel(all_msgs)
-    
-    scam_keywords = ["block", "suspend", "kyc", "verify", "urgent", "expire"]
-    is_scam = False
-    
-    if any(k in user_msg.lower() for k in scam_keywords):
-        is_scam = True
-    if intel_data["phishingLinks"] or intel_data["upiIds"]:
-        is_scam = True
+    session_id = sanitize_text(payload.sessionId)
+    user_msg = sanitize_text(payload.message.text)
+
+    logger.info(f"Incoming message: {repr(user_msg)}")
+
+    reply = generate_response(user_msg)
+
+    history = [sanitize_text(m.text) for m in payload.conversationHistory]
+    history.append(user_msg)
+
+    intel = extract_intel(history)
+
+    is_scam = bool(
+        intel["upiIds"] or
+        intel["phishingLinks"] or
+        intel["suspiciousKeywords"]
+    )
 
     if is_scam:
-        msg_count = len(payload.conversationHistory) + 2 
         background_tasks.add_task(
-            send_callback, 
-            session_id, 
-            is_scam, 
-            msg_count, 
-            intel_data
+            send_callback,
+            session_id,
+            True,
+            len(history) + 1,
+            intel
         )
 
     return {
         "status": "success",
-        "reply": reply_text
+        "reply": reply
     }
 
 # =========================================================
-# 6. CALLBACK WORKER
+# 8. CALLBACK SENDER (STEP 5)
 # =========================================================
 def send_callback(session_id: str, is_scam: bool, count: int, intel: dict):
-    final_payload = {
-        "sessionId": session_id,
+    payload = {
+        "sessionId": sanitize_text(session_id),
         "scamDetected": is_scam,
         "totalMessagesExchanged": count,
         "extractedIntelligence": intel,
-        "agentNotes": "Zombie Agent engaged. Extracted data via regex on Vercel."
+        "agentNotes": sanitize_text(
+            "Zombie Agent engaged. Unicode sanitized. JSON safe."
+        )
     }
+
     try:
-        requests.post(CALLBACK_URL, json=final_payload, headers={"x-api-key": SECRET_API_KEY}, timeout=5)
-        logger.info(f"Report sent for Session: {session_id}")
+        requests.post(
+            CALLBACK_URL,
+            json=payload,
+            headers={"x-api-key": SECRET_API_KEY},
+            timeout=5
+        )
+        logger.info(f"Callback sent for session {session_id}")
     except Exception as e:
-        logger.error(f"Failed to send report: {e}")
+        logger.error(f"Callback failed: {e}")
