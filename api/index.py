@@ -20,6 +20,14 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("SECRET_API_KEY")
 
+@app.get("/")
+def health():
+    return {
+        "status": "Agentic Honeypot Running",
+        "endpoint": "/honey-pot",
+        "platform": "Render"
+    }
+
 # =========================================================
 # UNICODE SANITIZATION
 # =========================================================
@@ -199,4 +207,4 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.index:app", host="0.0.0.0", port=8000)
+    uvicorn.run("api.index:app", host="0.0.0.0", port=1000)
