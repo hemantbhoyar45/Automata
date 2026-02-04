@@ -1,185 +1,160 @@
 import re
-import logging
-import random
-import requests
 import os
+import random
+import logging
 import unicodedata
+import requests
 from typing import List, Optional, Dict
 
 from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 
 # =========================================================
-# 1. SETUP & CONFIGURATION
+# APP SETUP
 # =========================================================
-app = FastAPI(title="GUVI Zombie HoneyPot")
+app = FastAPI(title="Agentic Scam HoneyPot")
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ZombieAgent")
+logger = logging.getLogger("HoneyPotAgent")
 
-CALLBACK_URL = os.environ.get(
-    "CALLBACK_URL",
-    "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-)
-SECRET_API_KEY = os.environ.get("SECRET_API_KEY", "YOUR_SECRET_API_KEY_HERE")
+CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
+SECRET_API_KEY = os.environ.get("SECRET_API_KEY")
 
 # =========================================================
-# 2. UNICODE SANITIZER (STEP 1–2)
+# UNICODE SANITIZATION
 # =========================================================
-def sanitize_text(text: str) -> str:
-    """
-    Normalizes unicode, removes control characters,
-    and ensures UTF-8 safe JSON strings.
-    """
+def sanitize(text: str) -> str:
     if not text:
         return ""
-
     text = unicodedata.normalize("NFKD", text)
-    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
-    text = text.encode("utf-8", "ignore").decode("utf-8")
-
-    return text.strip()
+    text = re.sub(r"[\x00-\x1F\x7F]", "", text)
+    return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# 3. ZOMBIE RESPONSE MEMORY
+# AGENT MEMORY (PRELOADED – supports large conversations)
 # =========================================================
-ZOMBIE_MEMORY = {
-    "intros": [
-        "Hello sir,", "Excuse me,", "Oh my god,", "Wait,", "Listen,",
-        "Actually,", "One second,", "Sir/Madam,", "I am confused,",
-        "Sorry for delay,", "Please help me,"
+ZOMBIE_INTROS = [
+    "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
+]
+
+ZOMBIE_REPLIES = {
+    "bank": [
+        "Why will my account be blocked?",
+        "Which bank are you talking about?",
+        "I just received pension yesterday."
     ],
     "upi": [
-        "my GPay is showing server error.",
-        "PhonePe is asking for my PIN.",
-        "the QR code is not scanning.",
-        "my bank server is down I think."
-    ],
-    "bank": [
-        "I cannot find my passbook.",
-        "the IFSC code shows invalid.",
-        "my ATM card is broken."
+        "I don't know my UPI ID.",
+        "Can I send 1 rupee to check?",
+        "Do I share this with anyone?"
     ],
     "link": [
-        "the link is not opening.",
-        "chrome says malware detected.",
-        "it asks me to download APK."
+        "The link is not opening.",
+        "Chrome says unsafe website.",
+        "Is this government site?"
     ],
     "otp": [
-        "I did not receive any OTP.",
-        "message came but vanished.",
-        "my son told me not to share code."
+        "My son told me not to share OTP.",
+        "The message disappeared.",
+        "Is OTP required?"
     ],
     "threat": [
-        "please do not block my account.",
-        "will police come to my house?",
+        "Please don't block my account.",
+        "Will police really come?",
         "I am very scared."
     ],
     "generic": [
-        "I don't understand this.",
-        "what should I do next?",
-        "is this real or fake?"
-    ],
-    "delays": [
-        "Just one minute please.",
-        "Restarting my phone.",
-        "Network is very slow."
-    ],
-    "closers": [
-        "Are you there?",
-        "Please reply.",
-        "Waiting for you."
+        "What should I do now?",
+        "Please explain slowly.",
+        "I don't understand technology."
     ]
 }
 
-# =========================================================
-# 4. RESPONSE GENERATOR (STEP 4)
-# =========================================================
-def generate_response(incoming_text: str) -> str:
-    msg = incoming_text.lower()
+ZOMBIE_CLOSERS = [
+    "Please reply.", "Are you there?", "Waiting for response."
+]
 
-    if any(x in msg for x in ["upi", "gpay", "paytm", "phonepe", "qr"]):
-        category = "upi"
-    elif any(x in msg for x in ["bank", "account", "ifsc"]):
-        category = "bank"
-    elif any(x in msg for x in ["link", "url", "http", "apk"]):
-        category = "link"
-    elif any(x in msg for x in ["otp", "pin", "code"]):
-        category = "otp"
-    elif any(x in msg for x in ["block", "police", "illegal"]):
-        category = "threat"
+# =========================================================
+# AGENT RESPONSE ENGINE
+# =========================================================
+def agent_reply(text: str) -> str:
+    t = text.lower()
+
+    if any(x in t for x in ["bank", "account", "ifsc"]):
+        cat = "bank"
+    elif any(x in t for x in ["upi", "gpay", "paytm", "phonepe"]):
+        cat = "upi"
+    elif any(x in t for x in ["http", "link", "apk", "url"]):
+        cat = "link"
+    elif any(x in t for x in ["otp", "pin", "code"]):
+        cat = "otp"
+    elif any(x in t for x in ["block", "police", "suspend"]):
+        cat = "threat"
     else:
-        category = "generic"
+        cat = "generic"
 
-    response = f"{random.choice(ZOMBIE_MEMORY['intros'])} " \
-               f"{random.choice(ZOMBIE_MEMORY[category])} " \
-               f"{random.choice(ZOMBIE_MEMORY['delays']) if random.random() > 0.5 else ''} " \
-               f"{random.choice(ZOMBIE_MEMORY['closers'])}"
-
-    return sanitize_text(response.replace("  ", " ").strip())
+    reply = f"{random.choice(ZOMBIE_INTROS)} {random.choice(ZOMBIE_REPLIES[cat])} {random.choice(ZOMBIE_CLOSERS)}"
+    return sanitize(reply)
 
 # =========================================================
-# 5. INTELLIGENCE EXTRACTION (STEP 3)
+# INTELLIGENCE EXTRACTION
 # =========================================================
-def extract_intel(history: List[str]) -> dict:
-    safe_blob = sanitize_text(" ".join(history))
+def extract_intelligence(messages: List[str]) -> Dict:
+    blob = sanitize(" ".join(messages))
 
     return {
-        "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", safe_blob))),
-        "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}", safe_blob))),
-        "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", safe_blob))),
-        "phoneNumbers": list(set(re.findall(r"(?:\+91[\-\s]?)?[6-9]\d{9}", safe_blob))),
+        "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", blob))),
+        "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}", blob))),
+        "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", blob))),
+        "phoneNumbers": list(set(re.findall(r"(?:\+91[\-\s]?)?[6-9]\d{9}", blob))),
         "suspiciousKeywords": list(set(re.findall(
-            r"(?i)\b(block|suspend|verify|kyc|urgent|expire|police)\b", safe_blob
+            r"(?i)\b(urgent|verify|blocked|suspend|kyc|police|expire)\b", blob
         )))
     }
 
 # =========================================================
-# 6. API MODELS
+# REQUEST MODELS (MATCHES HACKATHON FORMAT)
 # =========================================================
-class MessageItem(BaseModel):
+class Message(BaseModel):
     sender: str
     text: str
     timestamp: int
 
-class RequestPayload(BaseModel):
+class HoneyPotRequest(BaseModel):
     sessionId: str
-    message: MessageItem
-    conversationHistory: List[MessageItem] = []
+    message: Message
+    conversationHistory: List[Message] = []
     metadata: Optional[Dict] = None
 
 # =========================================================
-# 7. ROUTES
+# API ENDPOINT
 # =========================================================
-@app.get("/")
-def home():
-    return {"status": "Zombie Honeypot Active"}
-
 @app.post("/honey-pot")
-async def chat_handler(payload: RequestPayload, background_tasks: BackgroundTasks):
-    session_id = sanitize_text(payload.sessionId)
-    user_msg = sanitize_text(payload.message.text)
+async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
+    session_id = sanitize(payload.sessionId)
+    incoming = sanitize(payload.message.text)
 
-    logger.info(f"Incoming message: {repr(user_msg)}")
+    history = [sanitize(m.text) for m in payload.conversationHistory]
+    history.append(incoming)
 
-    reply = generate_response(user_msg)
+    # 🔒 SUPPORT UP TO 2000 MESSAGES SAFELY
+    if len(history) > 2000:
+        history = history[-2000:]
 
-    history = [sanitize_text(m.text) for m in payload.conversationHistory]
-    history.append(user_msg)
+    intel = extract_intelligence(history)
 
-    intel = extract_intel(history)
-
-    is_scam = bool(
+    scam_detected = bool(
         intel["upiIds"] or
         intel["phishingLinks"] or
         intel["suspiciousKeywords"]
     )
 
-    if is_scam:
+    reply = agent_reply(incoming)
+
+    if scam_detected:
         background_tasks.add_task(
-            send_callback,
+            send_final_callback,
             session_id,
-            True,
             len(history) + 1,
             intel
         )
@@ -190,26 +165,27 @@ async def chat_handler(payload: RequestPayload, background_tasks: BackgroundTask
     }
 
 # =========================================================
-# 8. CALLBACK SENDER (STEP 5)
+# MANDATORY FINAL CALLBACK
 # =========================================================
-def send_callback(session_id: str, is_scam: bool, count: int, intel: dict):
+def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
-        "sessionId": sanitize_text(session_id),
-        "scamDetected": is_scam,
-        "totalMessagesExchanged": count,
+        "sessionId": session_id,
+        "scamDetected": True,
+        "totalMessagesExchanged": total_messages,
         "extractedIntelligence": intel,
-        "agentNotes": sanitize_text(
-            "Zombie Agent engaged. Unicode sanitized. JSON safe."
-        )
+        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
     }
 
     try:
         requests.post(
             CALLBACK_URL,
             json=payload,
-            headers={"x-api-key": SECRET_API_KEY},
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": SECRET_API_KEY
+            },
             timeout=5
         )
-        logger.info(f"Callback sent for session {session_id}")
+        logger.info(f"Final report sent for session {session_id}")
     except Exception as e:
         logger.error(f"Callback failed: {e}")
