@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HoneyPotAgent")
 
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-SECRET_API_KEY = os.environ.get("SECRET_API_KEY")
+SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
 @app.get("/")
 def health():
