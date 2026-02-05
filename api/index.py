@@ -31,7 +31,7 @@ async def health(request: Request):
     response = {
         "status": "Agentic Honeypot Running",
         "platform": "Render",
-        "endpoint": "/honey-pote"
+        "endpoint": "/honey-pot"
     }
     log_json({"event": "health_check", "response": response})
     return response
