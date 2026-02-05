@@ -28,7 +28,7 @@ SECRET_API_KEY = os.environ.get("team_top_250_secret")
 async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
-        "endpoint": "/honey-pote",
+        "endpoint": "/honey-pot",
         "platform": "Render"
     }
 
