@@ -6,7 +6,8 @@ import unicodedata
 import requests
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI
+from fastapi import Request
 from pydantic import BaseModel
 
 # =========================================================
@@ -20,8 +21,14 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-from fastapi import Request
+# =========================================================
+# SESSION STATE (IN-MEMORY)
+# =========================================================
+SESSIONS = {}
 
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health(request: Request):
     return {
@@ -29,7 +36,6 @@ async def health(request: Request):
         "endpoint": "/honey-pot",
         "platform": "Render"
     }
-
 
 # =========================================================
 # UNICODE SANITIZATION
@@ -42,7 +48,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
+# AGENT MEMORY (ZOMBIE MODE)
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -128,7 +134,7 @@ def extract_intelligence(messages: List[str]) -> Dict:
     }
 
 # =========================================================
-# REQUEST MODELS (MATCHES HACKATHON FORMAT)
+# REQUEST MODELS
 # =========================================================
 class Message(BaseModel):
     sender: str
@@ -142,59 +148,71 @@ class HoneyPotRequest(BaseModel):
     metadata: Optional[Dict] = None
 
 # =========================================================
-# API ENDPOINT
+# CHAT ENDPOINT (NEVER STOPS EARLY)
 # =========================================================
 @app.post("/honey-pot")
-async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
+async def honey_pot(payload: HoneyPotRequest):
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
 
-    history = [sanitize(m.text) for m in payload.conversationHistory]
-    history.append(incoming)
+    if session_id not in SESSIONS:
+        SESSIONS[session_id] = {
+            "messages": [],
+            "intel": {
+                "bankAccounts": [],
+                "upiIds": [],
+                "phishingLinks": [],
+                "phoneNumbers": [],
+                "suspiciousKeywords": []
+            }
+        }
 
-    # 🔒 KEEP LAST 2000 MESSAGES MAX
-    if len(history) > 2000:
-        history = history[-2000:]
+    SESSIONS[session_id]["messages"].append(incoming)
+    SESSIONS[session_id]["messages"] = SESSIONS[session_id]["messages"][-2000:]
 
-    intel = extract_intelligence(history)
+    intel = extract_intelligence(SESSIONS[session_id]["messages"])
 
-    scam_detected = bool(
-        intel["upiIds"] or
-        intel["phishingLinks"] or
-        intel["suspiciousKeywords"]
-    )
+    for key in intel:
+        SESSIONS[session_id]["intel"][key] = list(
+            set(SESSIONS[session_id]["intel"][key] + intel[key])
+        )
 
     reply = agent_reply(incoming)
 
-    if scam_detected:
-        background_tasks.add_task(
-            send_final_callback,
-            session_id,
-            len(history) + 1,
-            intel
-        )
-
     return {
         "status": "success",
-        "reply": reply
+        "reply": reply,
+        "scamSignalsDetected": bool(
+            SESSIONS[session_id]["intel"]["upiIds"] or
+            SESSIONS[session_id]["intel"]["phishingLinks"] or
+            SESSIONS[session_id]["intel"]["suspiciousKeywords"]
+        )
     }
 
 # =========================================================
-# MANDATORY FINAL CALLBACK (GUVI)
+# STOP ENDPOINT (GUVI CONTROLS END)
 # =========================================================
-def send_final_callback(session_id: str, total_messages: int, intel: Dict):
-    payload = {
+@app.post("/honey-pot/stop")
+async def stop_session(payload: Dict):
+    session_id = sanitize(payload.get("sessionId"))
+
+    if session_id not in SESSIONS:
+        return {"status": "error", "message": "Session not found"}
+
+    session = SESSIONS[session_id]
+
+    final_payload = {
         "sessionId": session_id,
         "scamDetected": True,
-        "totalMessagesExchanged": total_messages,
-        "extractedIntelligence": intel,
-        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
+        "totalMessagesExchanged": len(session["messages"]),
+        "extractedIntelligence": session["intel"],
+        "agentNotes": "Session stopped by GUVI after full intelligence extraction."
     }
 
     try:
         requests.post(
             CALLBACK_URL,
-            json=payload,
+            json=final_payload,
             headers={
                 "Content-Type": "application/json",
                 "x-api-key": SECRET_API_KEY
@@ -205,10 +223,16 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     except Exception as e:
         logger.error(f"Callback failed: {e}")
 
+    del SESSIONS[session_id]
+
+    return {
+        "status": "stopped",
+        "finalReport": final_payload
+    }
+
 # =========================================================
-# LOCAL RUN (RENDER IGNORES THIS)
+# LOCAL RUN
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api.index:app", host="0.0.0.0", port=1000)
-
