@@ -1,12 +1,12 @@
 import re
 import os
 import random
-import logging
 import unicodedata
 import requests
+import json
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 
 # =========================================================
@@ -14,22 +14,27 @@ from pydantic import BaseModel
 # =========================================================
 app = FastAPI(title="Agentic Scam HoneyPot")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("HoneyPotAgent")
-
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-from fastapi import Request
+# =========================================================
+# JSON LOGGER (PRINT ONLY JSON)
+# =========================================================
+def log_json(data: dict):
+    print(json.dumps(data, ensure_ascii=False))
 
+# =========================================================
+# ROOT HEALTH CHECK (FIXES 404 + 405)
+# =========================================================
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health(request: Request):
-    return {
+    response = {
         "status": "Agentic Honeypot Running",
-        "endpoint": "/honey-pot",
-        "platform": "Render"
+        "platform": "Render",
+        "endpoint": "/honey-pote"
     }
-
+    log_json({"event": "health_check", "response": response})
+    return response
 
 # =========================================================
 # UNICODE SANITIZATION
@@ -42,7 +47,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
+# AGENT MEMORY
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -86,7 +91,7 @@ ZOMBIE_CLOSERS = [
 ]
 
 # =========================================================
-# AGENT RESPONSE ENGINE
+# RESPONSE ENGINE
 # =========================================================
 def agent_reply(text: str) -> str:
     t = text.lower()
@@ -128,7 +133,7 @@ def extract_intelligence(messages: List[str]) -> Dict:
     }
 
 # =========================================================
-# REQUEST MODELS (MATCHES HACKATHON FORMAT)
+# REQUEST MODELS
 # =========================================================
 class Message(BaseModel):
     sender: str
@@ -152,7 +157,6 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
 
-    # 🔒 KEEP LAST 2000 MESSAGES MAX
     if len(history) > 2000:
         history = history[-2000:]
 
@@ -165,6 +169,22 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     )
 
     reply = agent_reply(incoming)
+
+    # 🔹 LOG REQUEST
+    log_json({
+        "event": "incoming_message",
+        "sessionId": session_id,
+        "message": incoming,
+        "historyCount": len(history)
+    })
+
+    # 🔹 LOG ANALYSIS
+    log_json({
+        "event": "scam_analysis",
+        "sessionId": session_id,
+        "scamDetected": scam_detected,
+        "intelligence": intel
+    })
 
     if scam_detected:
         background_tasks.add_task(
@@ -180,7 +200,7 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     }
 
 # =========================================================
-# MANDATORY FINAL CALLBACK (GUVI)
+# FINAL CALLBACK
 # =========================================================
 def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
@@ -201,15 +221,21 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
             },
             timeout=5
         )
-        logger.info(f"Final report sent for session {session_id}")
+        log_json({
+            "event": "final_callback_sent",
+            "sessionId": session_id,
+            "totalMessages": total_messages
+        })
     except Exception as e:
-        logger.error(f"Callback failed: {e}")
+        log_json({
+            "event": "callback_error",
+            "sessionId": session_id,
+            "error": str(e)
+        })
 
 # =========================================================
-# LOCAL RUN (RENDER IGNORES THIS)
+# LOCAL RUN
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.index:app", host="0.0.0.0", port=1000) 
-
- 
+    uvicorn.run("index:app", host="0.0.0.0", port=10000)
