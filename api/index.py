@@ -159,9 +159,6 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
 
-    if len(history) > 2000:
-        history = history[-2000:]
-
     intel = extract_intelligence(history)
 
     scam_detected = bool(
@@ -172,20 +169,6 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     )
 
     reply = agent_reply(incoming)
-
-    log_json({
-        "event": "incoming_message",
-        "sessionId": session_id,
-        "message": incoming,
-        "historyCount": len(history)
-    })
-
-    log_json({
-        "event": "scam_analysis",
-        "sessionId": session_id,
-        "scamDetected": scam_detected,
-        "intelligence": intel
-    })
 
     should_finalize = (
         scam_detected and
@@ -198,11 +181,23 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     )
 
     if should_finalize:
+        final_result = {
+            "sessionId": session_id,
+            "scamDetected": True,
+            "totalMessagesExchanged": len(history) + 1,
+            "extractedIntelligence": intel,
+            "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
+        }
+
+        # 🔥 FINAL JSON OUTPUT (THIS WAS MISSING)
+        log_json({
+            "event": "FINAL_RESULT",
+            "data": final_result
+        })
+
         background_tasks.add_task(
             send_final_callback,
-            session_id,
-            len(history) + 1,
-            intel
+            final_result
         )
 
     return {
@@ -213,19 +208,11 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
 # =========================================================
 # FINAL CALLBACK
 # =========================================================
-def send_final_callback(session_id: str, total_messages: int, intel: Dict):
-    payload = {
-        "sessionId": session_id,
-        "scamDetected": True,
-        "totalMessagesExchanged": total_messages,
-        "extractedIntelligence": intel,
-        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
-    }
-
+def send_final_callback(final_result: Dict):
     try:
         requests.post(
             CALLBACK_URL,
-            json=payload,
+            json=final_result,
             headers={
                 "Content-Type": "application/json",
                 "x-api-key": SECRET_API_KEY
@@ -234,13 +221,11 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         )
         log_json({
             "event": "final_callback_sent",
-            "sessionId": session_id,
-            "totalMessages": total_messages
+            "sessionId": final_result["sessionId"]
         })
     except Exception as e:
         log_json({
             "event": "callback_error",
-            "sessionId": session_id,
             "error": str(e)
         })
 
