@@ -4,10 +4,11 @@ import random
 import logging
 import unicodedata
 import requests
+import json
+from datetime import datetime
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI
-from fastapi import Request
+from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 
 # =========================================================
@@ -21,8 +22,10 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-@app.get("/")
-def health():
+DATA_FILE = "honeypot_sessions.json"
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
         "endpoint": "/honey-pot",
@@ -40,7 +43,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (ZOMBIE MODE)
+# AGENT MEMORY
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -126,6 +129,34 @@ def extract_intelligence(messages: List[str]) -> Dict:
     }
 
 # =========================================================
+# SAVE SESSION TO JSON FILE (NEW)
+# =========================================================
+def save_session_to_json(session_id: str, messages: list, intel: dict):
+    record = {
+        "sessionId": session_id,
+        "endedAt": datetime.utcnow().isoformat(),
+        "conversation": messages,
+        "extractedIntelligence": intel
+    }
+
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = []
+
+        data.append(record)
+
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        logger.info(f"Session {session_id} saved to JSON")
+
+    except Exception as e:
+        logger.error(f"Failed to save JSON file: {e}")
+
+# =========================================================
 # REQUEST MODELS
 # =========================================================
 class Message(BaseModel):
@@ -140,71 +171,65 @@ class HoneyPotRequest(BaseModel):
     metadata: Optional[Dict] = None
 
 # =========================================================
-# CHAT ENDPOINT (NEVER STOPS EARLY)
+# API ENDPOINT
 # =========================================================
-@app.post("/honey-pot")
-async def honey_pot(payload: HoneyPotRequest):
+@app.post("/honey-pote")
+async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
 
-    if session_id not in SESSIONS:
-        SESSIONS[session_id] = {
-            "messages": [],
-            "intel": {
-                "bankAccounts": [],
-                "upiIds": [],
-                "phishingLinks": [],
-                "phoneNumbers": [],
-                "suspiciousKeywords": []
-            }
-        }
+    history = [sanitize(m.text) for m in payload.conversationHistory]
+    history.append(incoming)
 
-    SESSIONS[session_id]["messages"].append(incoming)
-    SESSIONS[session_id]["messages"] = SESSIONS[session_id]["messages"][-2000:]
+    if len(history) > 2000:
+        history = history[-2000:]
 
-    intel = extract_intelligence(SESSIONS[session_id]["messages"])
+    intel = extract_intelligence(history)
 
-    for key in intel:
-        SESSIONS[session_id]["intel"][key] = list(
-            set(SESSIONS[session_id]["intel"][key] + intel[key])
-        )
+    scam_detected = bool(
+        intel["upiIds"] or
+        intel["phishingLinks"] or
+        intel["suspiciousKeywords"]
+    )
 
     reply = agent_reply(incoming)
 
+    if scam_detected:
+        background_tasks.add_task(
+            send_final_callback,
+            session_id,
+            len(history) + 1,
+            intel
+        )
+
+        background_tasks.add_task(
+            save_session_to_json,
+            session_id,
+            history,
+            intel
+        )
+
     return {
         "status": "success",
-        "reply": reply,
-        "scamSignalsDetected": bool(
-            SESSIONS[session_id]["intel"]["upiIds"] or
-            SESSIONS[session_id]["intel"]["phishingLinks"] or
-            SESSIONS[session_id]["intel"]["suspiciousKeywords"]
-        )
+        "reply": reply
     }
 
 # =========================================================
-# STOP ENDPOINT (GUVI CONTROLS END)
+# FINAL CALLBACK
 # =========================================================
-@app.post("/honey-pot/stop")
-async def stop_session(payload: Dict):
-    session_id = sanitize(payload.get("sessionId"))
-
-    if session_id not in SESSIONS:
-        return {"status": "error", "message": "Session not found"}
-
-    session = SESSIONS[session_id]
-
-    final_payload = {
+def send_final_callback(session_id: str, total_messages: int, intel: Dict):
+    payload = {
         "sessionId": session_id,
         "scamDetected": True,
-        "totalMessagesExchanged": len(session["messages"]),
-        "extractedIntelligence": session["intel"],
-        "agentNotes": "Session stopped by GUVI after full intelligence extraction."
+        "totalMessagesExchanged": total_messages,
+        "extractedIntelligence": intel,
+        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
     }
 
     try:
         requests.post(
             CALLBACK_URL,
-            json=final_payload,
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "x-api-key": SECRET_API_KEY
@@ -214,13 +239,6 @@ async def stop_session(payload: Dict):
         logger.info(f"Final report sent for session {session_id}")
     except Exception as e:
         logger.error(f"Callback failed: {e}")
-
-    del SESSIONS[session_id]
-
-    return {
-        "status": "stopped",
-        "finalReport": final_payload
-    }
 
 # =========================================================
 # LOCAL RUN
