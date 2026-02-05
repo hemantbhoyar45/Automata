@@ -26,7 +26,7 @@ from fastapi import Request
 async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
-        "endpoint": "/honey-pote",
+        "endpoint": "/honey-pot",
         "platform": "Render"
     }
 
@@ -144,7 +144,7 @@ class HoneyPotRequest(BaseModel):
 # =========================================================
 # API ENDPOINT
 # =========================================================
-@app.post("/honey-pote")
+@app.post("/honey-pot")
 async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
@@ -211,3 +211,4 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("api.index:app", host="0.0.0.0", port=1000)
+
