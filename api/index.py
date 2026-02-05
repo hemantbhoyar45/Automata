@@ -6,7 +6,7 @@ import unicodedata
 import requests
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi import FastAPI, BackgroundTasks
 from pydantic import BaseModel
 
 # =========================================================
@@ -27,6 +27,7 @@ async def health(request: Request):
         "endpoint": "/honey-pot",
         "platform": "Render"
     }
+
 
 # =========================================================
 # UNICODE SANITIZATION
