@@ -26,7 +26,7 @@ from fastapi import Request
 async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
-        "endpoint": "/honey-pot",
+        "endpoint": "/honey-pote",
         "platform": "Render"
     }
 
