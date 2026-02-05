@@ -20,13 +20,16 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-@app.get("/")
-def health():
+from fastapi import Request
+
+@app.api_route("/", methods=["GET", "HEAD"])
+async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
         "endpoint": "/honey-pot",
         "platform": "Render"
     }
+
 
 # =========================================================
 # UNICODE SANITIZATION
