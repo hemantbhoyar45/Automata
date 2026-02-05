@@ -4,9 +4,11 @@ import random
 import logging
 import unicodedata
 import requests
+import json
+from datetime import datetime
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 
 # =========================================================
@@ -20,7 +22,7 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-from fastapi import Request
+DATA_FILE = "honeypot_sessions.json"
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health(request: Request):
@@ -29,7 +31,6 @@ async def health(request: Request):
         "endpoint": "/honey-pot",
         "platform": "Render"
     }
-
 
 # =========================================================
 # UNICODE SANITIZATION
@@ -42,7 +43,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
+# AGENT MEMORY
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -128,7 +129,35 @@ def extract_intelligence(messages: List[str]) -> Dict:
     }
 
 # =========================================================
-# REQUEST MODELS (MATCHES HACKATHON FORMAT)
+# SAVE SESSION TO JSON FILE (NEW)
+# =========================================================
+def save_session_to_json(session_id: str, messages: list, intel: dict):
+    record = {
+        "sessionId": session_id,
+        "endedAt": datetime.utcnow().isoformat(),
+        "conversation": messages,
+        "extractedIntelligence": intel
+    }
+
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        else:
+            data = []
+
+        data.append(record)
+
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        logger.info(f"Session {session_id} saved to JSON")
+
+    except Exception as e:
+        logger.error(f"Failed to save JSON file: {e}")
+
+# =========================================================
+# REQUEST MODELS
 # =========================================================
 class Message(BaseModel):
     sender: str
@@ -152,7 +181,6 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
 
-    # 🔒 KEEP LAST 2000 MESSAGES MAX
     if len(history) > 2000:
         history = history[-2000:]
 
@@ -174,13 +202,20 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
             intel
         )
 
+        background_tasks.add_task(
+            save_session_to_json,
+            session_id,
+            history,
+            intel
+        )
+
     return {
         "status": "success",
         "reply": reply
     }
 
 # =========================================================
-# MANDATORY FINAL CALLBACK (GUVI)
+# FINAL CALLBACK
 # =========================================================
 def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
@@ -206,7 +241,7 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         logger.error(f"Callback failed: {e}")
 
 # =========================================================
-# LOCAL RUN (RENDER IGNORES THIS)
+# LOCAL RUN
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
