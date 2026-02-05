@@ -214,7 +214,7 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
         "status": "success",
         "reply": reply
     }
-    return finalPayload.json()
+    return finalPayload
 
 # =========================================================
 # FINAL CALLBACK
