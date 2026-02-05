@@ -141,7 +141,7 @@ class HoneyPotRequest(BaseModel):
 # =========================================================
 # API ENDPOINT
 # =========================================================
-@app.post("/honey-pot")
+@app.post("/honey-pote")
 async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
