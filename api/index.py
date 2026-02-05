@@ -4,8 +4,6 @@ import random
 import logging
 import unicodedata
 import requests
-import json
-from datetime import datetime
 from typing import List, Optional, Dict
 
 from fastapi import FastAPI, BackgroundTasks, Request
@@ -21,11 +19,6 @@ logger = logging.getLogger("HoneyPotAgent")
 
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
-
-DATA_FILE = "honeypot_sessions.json"
-
-# 🔐 SESSION STATE MEMORY (VERY IMPORTANT)
-ACTIVE_SESSIONS: Dict[str, Dict] = {}
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health(request: Request):
@@ -46,7 +39,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY
+# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -108,11 +101,12 @@ def agent_reply(text: str) -> str:
     else:
         cat = "generic"
 
-    return sanitize(
+    reply = (
         f"{random.choice(ZOMBIE_INTROS)} "
         f"{random.choice(ZOMBIE_REPLIES[cat])} "
         f"{random.choice(ZOMBIE_CLOSERS)}"
     )
+    return sanitize(reply)
 
 # =========================================================
 # INTELLIGENCE EXTRACTION
@@ -131,34 +125,7 @@ def extract_intelligence(messages: List[str]) -> Dict:
     }
 
 # =========================================================
-# SAVE SESSION TO JSON (ONLY ONCE)
-# =========================================================
-def save_session_to_json(session_id: str, messages: list, intel: dict):
-    record = {
-        "sessionId": session_id,
-        "endedAt": datetime.utcnow().isoformat(),
-        "conversation": messages,
-        "extractedIntelligence": intel
-    }
-
-    try:
-        data = []
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-        data.append(record)
-
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-
-        logger.info(f"Session {session_id} saved to JSON")
-
-    except Exception as e:
-        logger.error(f"JSON save failed: {e}")
-
-# =========================================================
-# REQUEST MODELS
+# REQUEST MODELS (MATCHES HACKATHON FORMAT)
 # =========================================================
 class Message(BaseModel):
     sender: str
@@ -179,44 +146,30 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
 
-    # INIT SESSION IF NEW
-    if session_id not in ACTIVE_SESSIONS:
-        ACTIVE_SESSIONS[session_id] = {
-            "finalized": False
-        }
-
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
+
+    # 🔒 KEEP LAST 2000 MESSAGES MAX
+    if len(history) > 2000:
+        history = history[-2000:]
 
     intel = extract_intelligence(history)
 
     scam_detected = bool(
         intel["upiIds"] or
         intel["phishingLinks"] or
-        intel["phoneNumbers"] or
-        intel["bankAccounts"] or
         intel["suspiciousKeywords"]
     )
 
-    # 🚨 FINALIZE ONLY ONCE
-    if scam_detected and not ACTIVE_SESSIONS[session_id]["finalized"]:
-        ACTIVE_SESSIONS[session_id]["finalized"] = True
+    reply = agent_reply(incoming)
 
+    if scam_detected:
         background_tasks.add_task(
             send_final_callback,
             session_id,
-            len(history),
+            len(history) + 1,
             intel
         )
-
-        background_tasks.add_task(
-            save_session_to_json,
-            session_id,
-            history,
-            intel
-        )
-
-    reply = agent_reply(incoming)
 
     return {
         "status": "success",
@@ -224,7 +177,7 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     }
 
 # =========================================================
-# FINAL CALLBACK
+# MANDATORY FINAL CALLBACK (GUVI)
 # =========================================================
 def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
@@ -232,7 +185,7 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         "scamDetected": True,
         "totalMessagesExchanged": total_messages,
         "extractedIntelligence": intel,
-        "agentNotes": "Scammer used urgency, account threats, and payment redirection."
+        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
     }
 
     try:
@@ -245,12 +198,12 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
             },
             timeout=5
         )
-        logger.info(f"Final callback sent for {session_id}")
+        logger.info(f"Final report sent for session {session_id}")
     except Exception as e:
         logger.error(f"Callback failed: {e}")
 
 # =========================================================
-# LOCAL RUN
+# LOCAL RUN (RENDER IGNORES THIS)
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
