@@ -17,6 +17,8 @@ app = FastAPI(title="Agentic Scam HoneyPot")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
+MIN_TURNS_BEFORE_FINAL = 6
+
 # =========================================================
 # JSON LOGGER (PRINT ONLY JSON)
 # =========================================================
@@ -24,14 +26,14 @@ def log_json(data: dict):
     print(json.dumps(data, ensure_ascii=False))
 
 # =========================================================
-# ROOT HEALTH CHECK (FIXES 404 + 405)
+# ROOT HEALTH CHECK
 # =========================================================
 @app.api_route("/", methods=["GET", "HEAD"])
 async def health(request: Request):
     response = {
         "status": "Agentic Honeypot Running",
         "platform": "Render",
-        "endpoint": "/honey-pot"
+        "endpoint": "/honey-pote"
     }
     log_json({"event": "health_check", "response": response})
     return response
@@ -165,12 +167,12 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     scam_detected = bool(
         intel["upiIds"] or
         intel["phishingLinks"] or
+        intel["phoneNumbers"] or
         intel["suspiciousKeywords"]
     )
 
     reply = agent_reply(incoming)
 
-    # 🔹 LOG REQUEST
     log_json({
         "event": "incoming_message",
         "sessionId": session_id,
@@ -178,7 +180,6 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
         "historyCount": len(history)
     })
 
-    # 🔹 LOG ANALYSIS
     log_json({
         "event": "scam_analysis",
         "sessionId": session_id,
@@ -186,7 +187,17 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
         "intelligence": intel
     })
 
-    if scam_detected:
+    should_finalize = (
+        scam_detected and
+        len(history) >= MIN_TURNS_BEFORE_FINAL and
+        (
+            intel["upiIds"] or
+            intel["phishingLinks"] or
+            intel["phoneNumbers"]
+        )
+    )
+
+    if should_finalize:
         background_tasks.add_task(
             send_final_callback,
             session_id,
