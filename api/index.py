@@ -21,16 +21,8 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
-# =========================================================
-# SESSION STATE (IN-MEMORY)
-# =========================================================
-SESSIONS = {}
-
-# =========================================================
-# HEALTH CHECK
-# =========================================================
-@app.api_route("/", methods=["GET", "HEAD"])
-async def health(request: Request):
+@app.get("/")
+def health():
     return {
         "status": "Agentic Honeypot Running",
         "endpoint": "/honey-pot",
