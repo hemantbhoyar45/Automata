@@ -20,10 +20,10 @@ SECRET_API_KEY = os.environ.get("team_top_250_secret")
 MIN_TURNS_BEFORE_FINAL = 6
 
 # =========================================================
-# JSON LOGGER (PRINT ONLY JSON)
+# JSON LOGGER (RENDER SAFE)
 # =========================================================
 def log_json(data: dict):
-    print(json.dumps(data, ensure_ascii=False))
+    print(json.dumps(data, ensure_ascii=False), flush=True)
 
 # =========================================================
 # ROOT HEALTH CHECK
@@ -111,12 +111,11 @@ def agent_reply(text: str) -> str:
     else:
         cat = "generic"
 
-    reply = (
+    return sanitize(
         f"{random.choice(ZOMBIE_INTROS)} "
         f"{random.choice(ZOMBIE_REPLIES[cat])} "
         f"{random.choice(ZOMBIE_CLOSERS)}"
     )
-    return sanitize(reply)
 
 # =========================================================
 # INTELLIGENCE EXTRACTION
@@ -130,7 +129,7 @@ def extract_intelligence(messages: List[str]) -> Dict:
         "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", blob))),
         "phoneNumbers": list(set(re.findall(r"(?:\+91[\-\s]?)?[6-9]\d{9}", blob))),
         "suspiciousKeywords": list(set(re.findall(
-            r"(?i)\b(urgent|verify|blocked|suspend|kyc|police|expire)\b", blob
+            r"(?i)\b(urgent|verify|blocked|suspend|kyc|police|otp)\b", blob
         )))
     }
 
@@ -170,34 +169,37 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
 
     reply = agent_reply(incoming)
 
+    log_json({
+        "event": "incoming_message",
+        "sessionId": session_id,
+        "message": incoming,
+        "turns": len(history)
+    })
+
     should_finalize = (
         scam_detected and
         len(history) >= MIN_TURNS_BEFORE_FINAL and
-        (
-            intel["upiIds"] or
-            intel["phishingLinks"] or
-            intel["phoneNumbers"]
-        )
+        (intel["upiIds"] or intel["phoneNumbers"] or intel["phishingLinks"])
     )
 
     if should_finalize:
-        final_result = {
+        final_payload = {
             "sessionId": session_id,
             "scamDetected": True,
-            "totalMessagesExchanged": len(history) + 1,
+            "totalMessagesExchanged": len(history),
             "extractedIntelligence": intel,
-            "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
+            "agentNotes": "Scammer used urgency, OTP request, and account blocking threats."
         }
 
         # 🔥 FINAL JSON OUTPUT (THIS WAS MISSING)
         log_json({
             "event": "FINAL_RESULT",
-            "data": final_result
+            "data": final_payload
         })
 
         background_tasks.add_task(
             send_final_callback,
-            final_result
+            final_payload
         )
 
     return {
@@ -208,26 +210,20 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
 # =========================================================
 # FINAL CALLBACK
 # =========================================================
-def send_final_callback(final_result: Dict):
+def send_final_callback(payload: Dict):
     try:
         requests.post(
             CALLBACK_URL,
-            json=final_result,
+            json=payload,
             headers={
                 "Content-Type": "application/json",
                 "x-api-key": SECRET_API_KEY
             },
             timeout=5
         )
-        log_json({
-            "event": "final_callback_sent",
-            "sessionId": final_result["sessionId"]
-        })
+        log_json({"event": "final_callback_sent", "sessionId": payload["sessionId"]})
     except Exception as e:
-        log_json({
-            "event": "callback_error",
-            "error": str(e)
-        })
+        log_json({"event": "callback_error", "error": str(e)})
 
 # =========================================================
 # LOCAL RUN
