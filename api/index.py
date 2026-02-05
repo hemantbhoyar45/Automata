@@ -4,9 +4,10 @@ import random
 import logging
 import unicodedata
 import requests
+import json
 from typing import List, Optional, Dict
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from pydantic import BaseModel
 
 # =========================================================
@@ -20,17 +21,19 @@ logger = logging.getLogger("HoneyPotAgent")
 CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 @app.api_route("/", methods=["GET", "HEAD"])
-async def health(request: requests):
+async def health(request: Request):
     return {
         "status": "Agentic Honeypot Running",
-        "endpoint": "/honey-pot",
+        "endpoint": "/honey-pote",
         "platform": "Render"
     }
 
-
 # =========================================================
-# UNICODE SANITIZATION
+# SANITIZATION
 # =========================================================
 def sanitize(text: str) -> str:
     if not text:
@@ -40,7 +43,7 @@ def sanitize(text: str) -> str:
     return text.encode("utf-8", "ignore").decode("utf-8").strip()
 
 # =========================================================
-# AGENT MEMORY (PRELOADED RESPONSES – 2000+ SAFE)
+# AGENT MEMORY
 # =========================================================
 ZOMBIE_INTROS = [
     "Hello sir,", "Excuse me,", "One second please,", "Listen,", "I am confused,"
@@ -84,7 +87,7 @@ ZOMBIE_CLOSERS = [
 ]
 
 # =========================================================
-# AGENT RESPONSE ENGINE
+# AGENT RESPONSE
 # =========================================================
 def agent_reply(text: str) -> str:
     t = text.lower()
@@ -102,31 +105,29 @@ def agent_reply(text: str) -> str:
     else:
         cat = "generic"
 
-    reply = (
+    return sanitize(
         f"{random.choice(ZOMBIE_INTROS)} "
         f"{random.choice(ZOMBIE_REPLIES[cat])} "
         f"{random.choice(ZOMBIE_CLOSERS)}"
     )
-    return sanitize(reply)
 
 # =========================================================
 # INTELLIGENCE EXTRACTION
 # =========================================================
 def extract_intelligence(messages: List[str]) -> Dict:
     blob = sanitize(" ".join(messages))
-
     return {
         "bankAccounts": list(set(re.findall(r"\b\d{9,18}\b", blob))),
-        "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}", blob))),
+        "upiIds": list(set(re.findall(r"[a-zA-Z0-9.\-_]+@[a-zA-Z]+", blob))),
         "phishingLinks": list(set(re.findall(r"https?://\S+|www\.\S+", blob))),
-        "phoneNumbers": list(set(re.findall(r"(?:\+91[\-\s]?)?[6-9]\d{9}", blob))),
+        "phoneNumbers": list(set(re.findall(r"(?:\+91)?[6-9]\d{9}", blob))),
         "suspiciousKeywords": list(set(re.findall(
             r"(?i)\b(urgent|verify|blocked|suspend|kyc|police|expire)\b", blob
         )))
     }
 
 # =========================================================
-# REQUEST MODELS (MATCHES HACKATHON FORMAT)
+# MODELS
 # =========================================================
 class Message(BaseModel):
     sender: str
@@ -142,7 +143,7 @@ class HoneyPotRequest(BaseModel):
 # =========================================================
 # API ENDPOINT
 # =========================================================
-@app.post("/honey-pot")
+@app.post("/honey-pote")
 async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks):
     session_id = sanitize(payload.sessionId)
     incoming = sanitize(payload.message.text)
@@ -150,35 +151,40 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
     history = [sanitize(m.text) for m in payload.conversationHistory]
     history.append(incoming)
 
-    # 🔒 KEEP LAST 2000 MESSAGES MAX
     if len(history) > 2000:
         history = history[-2000:]
 
     intel = extract_intelligence(history)
 
     scam_detected = bool(
-        intel["upiIds"] or
-        intel["phishingLinks"] or
-        intel["suspiciousKeywords"]
+        intel["upiIds"] or intel["phishingLinks"] or intel["suspiciousKeywords"]
     )
 
     reply = agent_reply(incoming)
+
+    response_json = {
+        "sessionId": session_id,
+        "reply": reply,
+        "scamDetected": scam_detected,
+        "totalMessagesExchanged": len(history),
+        "extractedIntelligence": intel
+    }
+
+    # 🔥 PRINT CLEAN JSON TO TERMINAL
+    print(json.dumps(response_json, indent=2))
 
     if scam_detected:
         background_tasks.add_task(
             send_final_callback,
             session_id,
-            len(history) + 1,
+            len(history),
             intel
         )
 
-    return {
-        "status": "success",
-        "reply": reply
-    }
+    return response_json
 
 # =========================================================
-# MANDATORY FINAL CALLBACK (GUVI)
+# CALLBACK
 # =========================================================
 def send_final_callback(session_id: str, total_messages: int, intel: Dict):
     payload = {
@@ -186,7 +192,7 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         "scamDetected": True,
         "totalMessagesExchanged": total_messages,
         "extractedIntelligence": intel,
-        "agentNotes": "Scammer used urgency, account blocking and payment redirection tactics."
+        "agentNotes": "Scammer used urgency and fear tactics."
     }
 
     try:
@@ -204,8 +210,8 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
         logger.error(f"Callback failed: {e}")
 
 # =========================================================
-# LOCAL RUN (RENDER IGNORES THIS)
+# LOCAL RUN
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.index:app", host="0.0.0.0", port=1000)
+    uvicorn.run("index:app", host="0.0.0.0", port=10000)
