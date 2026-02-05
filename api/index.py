@@ -18,12 +18,30 @@ CALLBACK_URL = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
 SECRET_API_KEY = os.environ.get("team_top_250_secret")
 
 MIN_TURNS_BEFORE_FINAL = 6
+JSON_FILE = "honeypot_output.json"
 
 # =========================================================
-# JSON LOGGER (RENDER SAFE)
+# JSON LOGGER (PRINT + FILE)
 # =========================================================
 def log_json(data: dict):
     print(json.dumps(data, ensure_ascii=False), flush=True)
+
+    try:
+        if not os.path.exists(JSON_FILE):
+            with open(JSON_FILE, "w", encoding="utf-8") as f:
+                json.dump([], f)
+
+        with open(JSON_FILE, "r+", encoding="utf-8") as f:
+            existing = json.load(f)
+            existing.append(data)
+            f.seek(0)
+            json.dump(existing, f, indent=2, ensure_ascii=False)
+
+    except Exception as e:
+        print(json.dumps({
+            "event": "json_write_error",
+            "error": str(e)
+        }), flush=True)
 
 # =========================================================
 # ROOT HEALTH CHECK
@@ -39,7 +57,7 @@ async def health(request: Request):
     return response
 
 # =========================================================
-# UNICODE SANITIZATION
+# SANITIZATION
 # =========================================================
 def sanitize(text: str) -> str:
     if not text:
@@ -176,31 +194,21 @@ async def honey_pot(payload: HoneyPotRequest, background_tasks: BackgroundTasks)
         "turns": len(history)
     })
 
-    should_finalize = (
-        scam_detected and
-        len(history) >= MIN_TURNS_BEFORE_FINAL and
-        (intel["upiIds"] or intel["phoneNumbers"] or intel["phishingLinks"])
-    )
-
-    if should_finalize:
+    if scam_detected and len(history) >= MIN_TURNS_BEFORE_FINAL:
         final_payload = {
             "sessionId": session_id,
             "scamDetected": True,
             "totalMessagesExchanged": len(history),
             "extractedIntelligence": intel,
-            "agentNotes": "Scammer used urgency, OTP request, and account blocking threats."
+            "agentNotes": "Scammer used urgency, OTP request and account blocking threats."
         }
 
-        # 🔥 FINAL JSON OUTPUT (THIS WAS MISSING)
         log_json({
             "event": "FINAL_RESULT",
             "data": final_payload
         })
 
-        background_tasks.add_task(
-            send_final_callback,
-            final_payload
-        )
+        background_tasks.add_task(send_final_callback, final_payload)
 
     return {
         "status": "success",
@@ -221,9 +229,15 @@ def send_final_callback(payload: Dict):
             },
             timeout=5
         )
-        log_json({"event": "final_callback_sent", "sessionId": payload["sessionId"]})
+        log_json({
+            "event": "final_callback_sent",
+            "sessionId": payload["sessionId"]
+        })
     except Exception as e:
-        log_json({"event": "callback_error", "error": str(e)})
+        log_json({
+            "event": "callback_error",
+            "error": str(e)
+        })
 
 # =========================================================
 # LOCAL RUN
