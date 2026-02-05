@@ -1,4 +1,3 @@
- 
 import re
 import os
 import random
@@ -211,5 +210,4 @@ def send_final_callback(session_id: str, total_messages: int, intel: Dict):
 # =========================================================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("api.index:app", host="0.0.0.0", port=1000)
-
+    uvicorn.run("api.index:app", host="0.0.0.0", port=1000) 
